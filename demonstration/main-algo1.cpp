@@ -92,10 +92,10 @@ void initialize_rows(Mapping &victim, Mapping &aggr1, Mapping &aggr2, Mapping *d
 __attribute__((optimize("unroll-loops")))
 int do_samsung_utrr(uintptr_t target, int no_aggr_acts, int no_reads, int victim_count)
 {
-    int no_sync_acts = 2;       // activate sync aggressors this many times
+    int no_sync_acts = 1;       // activate sync aggressors this many times
     // The dummy rows are placed in different banks
     int no_dummy_acts = 4;       // activate dummy rows this many times
-
+    int no_dummies = 16; 
     // this is pretty arbitrary, we keep hammering for a long time
     // hoping for REF synchronization to work in our favor
     int iteration_per_victim = 8205*100; 
@@ -117,7 +117,7 @@ int do_samsung_utrr(uintptr_t target, int no_aggr_acts, int no_reads, int victim
     // rows used in synchronizing with refresh
     Mapping sync1;
     Mapping sync2;
-    Mapping dummy_rows[16];
+    Mapping dummy_rows[no_dummies];
 
     Hist h(100);
     Hist h_hammer(100);
@@ -158,7 +158,7 @@ int do_samsung_utrr(uintptr_t target, int no_aggr_acts, int no_reads, int victim
         std::cout << "Bank " << victim.get_bank() << " Victim Row " << victim.get_row() << " Aggr1 Row " << aggr1.get_row() << " Aggr2 Row " << aggr2.get_row() << std::endl;
         
         // assign somehow nearby rows to dummy row addresses
-        for (int j = 0 ; j < 16 ; j++)
+        for (int j = 0 ; j < no_dummies ; j++)
         {
             dummy_rows[j] = Mapping(victim);
             for (int k = 0 ; k < j + 100 ; k++)
@@ -176,7 +176,7 @@ int do_samsung_utrr(uintptr_t target, int no_aggr_acts, int no_reads, int victim
         // 2 aggressors, "no_aggr_acts" cache blocks accessed each
         volatile unsigned long long *aggr_a[256];
         // "16" dummies, "no_dummy_acts" cache blocks accessed each
-        volatile unsigned long long *dummy_a[no_dummy_acts*16];
+        volatile unsigned long long *dummy_a[no_dummy_acts*no_dummies];
 
 
         // sync_a stores pointers to sync rows
@@ -206,16 +206,16 @@ int do_samsung_utrr(uintptr_t target, int no_aggr_acts, int no_reads, int victim
         // dummy_a stores pointers to dummy rows
         for (int j = 0 ; j < no_dummy_acts ; j++)
         {
-            for (int k = 0 ; k < 16 ; k++)
+            for (int k = 0 ; k < no_dummies; k++)
             {
-                dummy_a[j*16 + k] = (volatile unsigned long long *) (dummy_rows[k].to_virt());
+                dummy_a[j*no_dummies + k] = (volatile unsigned long long *) (dummy_rows[k].to_virt());
                 dummy_rows[k].increment_column_cb();
             }
         }
 
         for (int j = 0 ; j < no_dummy_acts ; j++)
         {
-            for (int k = 0 ; k < 16 ; k++)
+            for (int k = 0 ; k < no_dummies ; k++)
                 dummy_rows[k].reset_column();
         }
 
@@ -236,9 +236,9 @@ int do_samsung_utrr(uintptr_t target, int no_aggr_acts, int no_reads, int victim
         for (int j = 0 ; j < no_sync_acts ; j++)
         {
             *(sync_a[j*2 + 0]);
-            *(sync_a[j*2 + 1]);
+            // *(sync_a[j*2 + 1]);
             asm volatile("clflush (%0)" : : "r" (sync_a[j*2 + 0]) : "memory");
-            asm volatile("clflush (%0)" : : "r" (sync_a[j*2 + 1]) : "memory");
+            //asm volatile("clflush (%0)" : : "r" (sync_a[j*2 + 1]) : "memory");
         }   
 
         // =================== SYNCHRONIZE /w REF =========================
@@ -259,9 +259,9 @@ int do_samsung_utrr(uintptr_t target, int no_aggr_acts, int no_reads, int victim
             for (int j = 0 ; j < no_sync_acts ; j++)
             {
                 *(sync_a[j*2 + 0]);
-                *(sync_a[j*2 + 1]);
+                // *(sync_a[j*2 + 1]);
                 asm volatile("clflush (%0)" : : "r" (sync_a[j*2 + 0]) : "memory");
-                asm volatile("clflush (%0)" : : "r" (sync_a[j*2 + 1]) : "memory");
+                //asm volatile("clflush (%0)" : : "r" (sync_a[j*2 + 1]) : "memory");
                 // To access different cache blocks in the aggressor row            
             }   
 
@@ -272,12 +272,11 @@ int do_samsung_utrr(uintptr_t target, int no_aggr_acts, int no_reads, int victim
                     "mov %%edx, %0\n\t" 
                     "mov %%eax, %1\n\t": "=r" (cycles_high1), "=r" (cycles_low1):: 
                     "%rax", "%rbx", "%rcx", "%rdx");
-                    
-            if (cycles_low1-cycles_low > 1000)
+            if (cycles_low1-cycles_low > 800)
                 break;
             #else
             clock_gettime(CLOCK_REALTIME, &t2);
-            if (t2.tv_nsec - t1.tv_nsec > 450) // 450ns ~= 1K TSC cycles
+            if (t2.tv_nsec - t1.tv_nsec > 360) // 360ns ~= 800 TSC cycles
                 break;
             #endif
         }
@@ -317,12 +316,11 @@ int do_samsung_utrr(uintptr_t target, int no_aggr_acts, int no_reads, int victim
             for (int k = 0 ; k < no_dummy_acts ; k++)
             {
                 asm volatile("mfence");
-                for (int l = 0 ; l < 16 ; l++)
-                    *(dummy_a[k*16 + l]);
-                for (int l = 0 ; l < 16 ; l++)
-                    asm volatile("clflush (%0)" : : "r" (dummy_a[k*16 + l]) : "memory");
+                for (int l = 0 ; l < no_dummies ; l++)
+                    *(dummy_a[k * no_dummies + l]);
+                for (int l = 0 ; l < no_dummies ; l++)
+                    asm volatile("clflush (%0)" : : "r" (dummy_a[k * no_dummies + l]) : "memory");
             }   
-
             asm volatile ("mfence");
 
             // =================== SYNCHRONIZE /w REF =========================
@@ -634,7 +632,7 @@ void physical_address_hammer(bool is_verify, int victim_count)
     else{
         const int experiment_count = 10;
         // read aggressors this many times
-        int no_reads_arr[experiment_count] = {1, 2, 4, 8, 16, 32, 48, 64, 80, 128};
+        int no_reads_arr[experiment_count] = {16, 32, 4, 8, 1, 2, 48, 64, 80, 128};
         // this array determines the index of no_reads_arr up to which that much read count can be fit into a refresh window with the given activation count
         // e.g., for activation count 3, we can perform number of reads upto no_reads_arr[experiment_counts[4-3]] = no_reads_arr[9] = 80 (not including)
         int experiment_counts[4] = {7, 9, 10, 10};
