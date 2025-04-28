@@ -167,7 +167,7 @@ int do_samsung_utrr(uintptr_t target, int no_aggr_acts, int no_reads, int victim
         }
 
         // initialize the victim and surrounding rows with the checkerboard pattern
-        initialize_rows(victim, aggr1, aggr2, dummy_rows, 16, 0x5555555555555555ULL);
+        initialize_rows(victim, aggr1, aggr2, dummy_rows, no_dummies, 0x5555555555555555ULL);
 
         // calculate victim & aggr & sync & dummy virtual addresses
 
